@@ -12,6 +12,11 @@ export interface EBook {
   chapters: Chapter[];
   lastPosition: number; // Current chunk index
   source?: BookSource;
+  originalFileBase64?: string; // Stored for background OCR continuation
+  mimeType?: string;
+  isFullyLoaded: boolean;
+  isLoadingMore?: boolean; // UI state for background loading
+  loadProgress?: number; // 0 to 100 percentage of file processed
 }
 
 export interface Chapter {

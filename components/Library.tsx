@@ -1,7 +1,7 @@
 
 import React, { useRef } from 'react';
 import { EBook } from '../types';
-import { Book, Upload, FileText, Trash2, PlayCircle, Plus } from 'lucide-react';
+import { Book, Upload, FileText, Trash2, PlayCircle, Plus, Loader2 } from 'lucide-react';
 
 interface LibraryProps {
   books: EBook[];
@@ -25,13 +25,13 @@ const Library: React.FC<LibraryProps> = ({ books, onUpload, onOpenBook, onDelete
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-12">
         <div>
-          <h1 className="text-4xl font-black text-[#2C3E50] tracking-tight">Local Library</h1>
-          <p className="text-gray-500 mt-2 font-medium">Upload and read your PDF and EPUB files with AI voice support.</p>
+          <h1 className="text-4xl font-black text-[#2C3E50] tracking-tight text-center md:text-left">ReadFlow Library</h1>
+          <p className="text-gray-500 mt-2 font-medium text-center md:text-left">PDF, EPUB, and Images with continuous background AI processing.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 w-full md:w-auto">
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 bg-[#16A085] hover:bg-[#138d75] text-white px-8 py-4 rounded-2xl shadow-xl transition-all font-bold active:scale-95"
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-[#16A085] hover:bg-[#138d75] text-white px-8 py-4 rounded-2xl shadow-xl transition-all font-bold active:scale-95"
           >
             <Upload size={20} />
             Import Book
@@ -57,7 +57,7 @@ const Library: React.FC<LibraryProps> = ({ books, onUpload, onOpenBook, onDelete
           </div>
           <h3 className="text-3xl font-black text-[#2C3E50]">Your Shelf is Empty</h3>
           <p className="text-gray-400 mt-4 max-w-sm leading-relaxed font-medium">
-            Click here to upload your first e-book. We support PDF, EPUB, and text files.
+            Click here to upload your first e-book. We support PDF, EPUB, and image files.
           </p>
           <div className="mt-10 flex items-center gap-2 text-[#16A085] font-black">
             <Plus size={24} />
@@ -71,6 +71,14 @@ const Library: React.FC<LibraryProps> = ({ books, onUpload, onOpenBook, onDelete
               key={book.id}
               className="group bg-white rounded-[2.5rem] p-8 shadow-sm hover:shadow-2xl transition-all duration-500 border border-gray-100 relative flex flex-col h-full hover:-translate-y-2"
             >
+              {/* Processing Badge */}
+              {!book.isFullyLoaded && (
+                <div className="absolute top-4 right-4 flex items-center gap-2 bg-teal-50 px-3 py-1.5 rounded-full border border-teal-100 z-10">
+                  <Loader2 size={12} className="animate-spin text-[#16A085]" />
+                  <span className="text-[10px] font-black text-[#16A085] uppercase tracking-tighter">Processing...</span>
+                </div>
+              )}
+
               <div className="flex items-start gap-6 flex-1">
                 <div className="p-5 rounded-2xl bg-teal-50 text-[#16A085] flex items-center justify-center transition-all shadow-sm group-hover:rotate-3 group-hover:bg-[#16A085] group-hover:text-white">
                   <FileText size={40} strokeWidth={1.5} />
@@ -83,8 +91,8 @@ const Library: React.FC<LibraryProps> = ({ books, onUpload, onOpenBook, onDelete
                     <span className="text-[10px] font-black px-3 py-1 bg-gray-100 text-gray-400 rounded-lg uppercase tracking-widest">
                       {book.format}
                     </span>
-                    <span className="text-xs font-bold text-gray-300">
-                      {book.content.length} segments
+                    <span className="text-xs font-bold text-gray-400">
+                      {book.content.length} segments loaded
                     </span>
                   </div>
                 </div>
