@@ -1,0 +1,7 @@
+{
+  "name": "E-Book Reader Dashboard",
+  "description": "A sophisticated e-book reader with AI-powered TTS, supporting multiple accents and styles, featuring synchronized scrolling and OCR capabilities.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
