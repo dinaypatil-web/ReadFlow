@@ -104,14 +104,13 @@ const App: React.FC = () => {
     gender: 'Female'
   });
 
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const isTransitioningRef = useRef(false);
   const wordUpdateIntervalRef = useRef<number | null>(null);
   const wakeLockRef = useRef<any>(null);
 
   // PREFETCH BUFFER SYSTEM
-  const bufferRef = useRef<Map<number, AudioBuffer>>(new Map());
+  const bufferRef = useRef<Map<number, { url: string; duration: number }>>(new Map());
   const fetchingIndicesRef = useRef<Set<number>>(new Set());
 
   // WAKE LOCK & MEDIA SESSION LOGIC
@@ -194,25 +193,12 @@ const App: React.FC = () => {
     }
   }, [books]);
 
-  const resumeAudioContext = useCallback(async () => {
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      }
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
-      }
-      return audioContextRef.current;
-    } catch (e) { return null; }
-  }, []);
-
   const stopAudio = useCallback(() => {
-    if (audioSourceRef.current) {
-      try {
-        audioSourceRef.current.onended = null;
-        audioSourceRef.current.stop();
-      } catch (e) {}
-      audioSourceRef.current = null;
+    if (audioElementRef.current) {
+      audioElementRef.current.onended = null;
+      audioElementRef.current.pause();
+      audioElementRef.current.src = '';
+      audioElementRef.current = null;
     }
     if (wordUpdateIntervalRef.current) {
       window.clearInterval(wordUpdateIntervalRef.current);
@@ -221,10 +207,49 @@ const App: React.FC = () => {
     setReaderState(prev => ({ ...prev, activeWordIndex: -1 }));
   }, []);
 
+  const purgeCachedAudio = useCallback((currentIndex: number) => {
+    const keepStart = Math.max(0, currentIndex - 1);
+    const keepEnd = currentIndex + 6;
+    bufferRef.current.forEach((entry, idx) => {
+      if (idx < keepStart || idx > keepEnd) {
+        URL.revokeObjectURL(entry.url);
+        bufferRef.current.delete(idx);
+      }
+    });
+  }, []);
+
+  const createWavBlobUrl = useCallback((pcmData: Uint8Array, sampleRate = 24000, channels = 1): string => {
+    const bytesPerSample = 2;
+    const blockAlign = channels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = pcmData.byteLength;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    const writeString = (offset: number, value: string) => {
+      for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i));
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+    new Uint8Array(buffer, 44).set(pcmData);
+
+    return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  }, []);
+
   const prefetchSentences = useCallback(async (startIndex: number) => {
     if (!readerState.currentBook) return;
-    const ctx = await resumeAudioContext();
-    if (!ctx) return;
 
     const { accent, style, gender } = readerState;
     const lookahead = 5;
@@ -242,8 +267,10 @@ const App: React.FC = () => {
         try {
           const base64Audio = await geminiService.generateSpeech(text, accent, style, gender);
           const audioData = geminiService.decode(base64Audio);
-          const decodedBuffer = await geminiService.decodeAudioData(audioData, ctx, 24000, 1);
-          bufferRef.current.set(i, decodedBuffer);
+          const url = createWavBlobUrl(audioData);
+          const sampleCount = audioData.byteLength / 2;
+          const duration = sampleCount / 24000;
+          bufferRef.current.set(i, { url, duration });
         } catch (e) {
           console.error(`Prefetch failed for index ${i}`, e);
         } finally {
@@ -251,12 +278,10 @@ const App: React.FC = () => {
         }
       })();
     }
-  }, [readerState.currentBook, readerState.accent, readerState.style, readerState.gender, resumeAudioContext]);
+  }, [readerState.currentBook, readerState.accent, readerState.style, readerState.gender, createWavBlobUrl]);
 
   const playSentence = useCallback(async (index: number) => {
     if (!readerState.currentBook || isTransitioningRef.current) return;
-    const ctx = await resumeAudioContext();
-    if (!ctx) return;
 
     isTransitioningRef.current = true;
     stopAudio();
@@ -273,32 +298,33 @@ const App: React.FC = () => {
     }
 
     try {
-      let decodedBuffer: AudioBuffer;
+      let sentenceAudio: { url: string; duration: number };
 
       if (bufferRef.current.has(index)) {
-        decodedBuffer = bufferRef.current.get(index)!;
+        sentenceAudio = bufferRef.current.get(index)!;
       } else {
         const base64Audio = await geminiService.generateSpeech(
           text, readerState.accent, readerState.style, readerState.gender
         );
         const audioData = geminiService.decode(base64Audio);
-        decodedBuffer = await geminiService.decodeAudioData(audioData, ctx, 24000, 1);
+        const url = createWavBlobUrl(audioData);
+        const sampleCount = audioData.byteLength / 2;
+        sentenceAudio = { url, duration: sampleCount / 24000 };
       }
       
       prefetchSentences(index + 1);
+      purgeCachedAudio(index);
 
-      const source = ctx.createBufferSource();
-      const gainNode = ctx.createGain();
-      source.buffer = decodedBuffer;
-      source.playbackRate.value = readerState.speed;
-      gainNode.gain.value = readerState.volume;
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
+      const audio = new Audio(sentenceAudio.url);
+      audio.preload = 'auto';
+      audio.volume = readerState.volume;
+      audio.playbackRate = readerState.speed;
+      audio.playsInline = true;
+      audioElementRef.current = audio;
 
       const words = text.trim().split(/\s+/);
       const totalChars = text.length;
-      const totalDuration = decodedBuffer.duration / readerState.speed;
-      const startTime = ctx.currentTime;
+      const totalDuration = sentenceAudio.duration / readerState.speed;
 
       let charAcc = 0;
       const wordTimestamps = words.map(word => {
@@ -308,7 +334,7 @@ const App: React.FC = () => {
       });
 
       wordUpdateIntervalRef.current = window.setInterval(() => {
-        const elapsed = ctx.currentTime - startTime;
+        const elapsed = audio.currentTime;
         let activeIdx = 0;
         for (let i = 0; i < wordTimestamps.length; i++) {
           if (elapsed >= wordTimestamps[i]) activeIdx = i;
@@ -317,9 +343,13 @@ const App: React.FC = () => {
         setReaderState(prev => prev.activeWordIndex !== activeIdx ? { ...prev, activeWordIndex: activeIdx } : prev);
       }, 50);
       
-      source.onended = () => {
+      audio.onended = () => {
         if (wordUpdateIntervalRef.current) window.clearInterval(wordUpdateIntervalRef.current);
-        bufferRef.current.delete(index);
+        const playedEntry = bufferRef.current.get(index);
+        if (playedEntry) {
+          URL.revokeObjectURL(playedEntry.url);
+          bufferRef.current.delete(index);
+        }
         setReaderState(prev => {
           if (prev.isPlaying && prev.currentIndex === index && index < prev.currentBook!.content.length - 1) {
             return { ...prev, currentIndex: index + 1, activeWordIndex: -1 };
@@ -327,23 +357,38 @@ const App: React.FC = () => {
           return { ...prev, isPlaying: false, activeWordIndex: -1 };
         });
       };
-      audioSourceRef.current = source;
-      source.start(0);
+      await audio.play();
     } catch (err) {
       console.error("Playback Error", err);
       setReaderState(prev => ({ ...prev, isPlaying: false }));
     } finally {
       isTransitioningRef.current = false;
     }
-  }, [readerState.currentBook, readerState.accent, readerState.style, readerState.gender, readerState.speed, readerState.volume, stopAudio, resumeAudioContext, prefetchSentences]);
+  }, [readerState.currentBook, readerState.accent, readerState.style, readerState.gender, readerState.speed, readerState.volume, stopAudio, prefetchSentences, createWavBlobUrl, purgeCachedAudio]);
 
   useEffect(() => {
+    bufferRef.current.forEach(entry => URL.revokeObjectURL(entry.url));
     bufferRef.current.clear();
     fetchingIndicesRef.current.clear();
     if (readerState.isPlaying) {
       prefetchSentences(readerState.currentIndex + 1);
     }
   }, [readerState.accent, readerState.gender, readerState.style, prefetchSentences]);
+
+  useEffect(() => {
+    if (audioElementRef.current) {
+      audioElementRef.current.volume = readerState.volume;
+      audioElementRef.current.playbackRate = readerState.speed;
+    }
+  }, [readerState.volume, readerState.speed]);
+
+  useEffect(() => {
+    return () => {
+      stopAudio();
+      bufferRef.current.forEach(entry => URL.revokeObjectURL(entry.url));
+      bufferRef.current.clear();
+    };
+  }, [stopAudio]);
 
   useEffect(() => {
     if (readerState.isPlaying) {
